@@ -1,0 +1,72 @@
+"""Defaults, reviewer roster loading, and shared prompt text."""
+
+from __future__ import annotations
+
+import importlib.resources as resources
+from dataclasses import dataclass
+
+import yaml
+
+# Model IDs (see /claude-api for the current list).
+DEFAULT_MODEL = "claude-opus-4-8"
+
+DEFAULT_ROUNDS = 1          # discussion rounds after the independent round (0 = single-pass)
+DEFAULT_MAX_PAGES = 100     # Claude PDF per-request page ceiling
+MAX_PDF_BYTES = 32 * 1024 * 1024  # 32 MB per-request ceiling
+DEFAULT_OUT_DIR = "out"
+
+# Output-token budgets per call type.
+REVIEW_MAX_TOKENS = 4096
+META_MAX_TOKENS = 4096
+TRIAGE_MAX_TOKENS = 1024
+
+# Prepended to every reviewer's system prompt.
+SHARED_PREAMBLE = (
+    "You are an expert peer reviewer on a program committee. You are reviewing the "
+    "attached paper (provided as a PDF, including all figures and tables). Read the "
+    "whole paper, including the figures, which you can see. Be specific, fair, and "
+    "constructive; ground every point in the actual content and cite sections, "
+    "figures, and tables by number. Make weaknesses actionable. When you are done, "
+    "call the submit_review tool with your structured review."
+)
+
+
+@dataclass(frozen=True)
+class Reviewer:
+    key: str
+    name: str
+    focus: str
+    system_prompt: str
+
+    def render_system_prompt(self, field: str, subfield: str) -> str:
+        """Fill {field}/{subfield} placeholders and prepend the shared preamble."""
+        body = self.system_prompt.format(field=field, subfield=subfield)
+        return f"{SHARED_PREAMBLE}\n\nYour perspective — {self.name} ({self.focus}):\n{body}"
+
+
+def load_roster() -> list[Reviewer]:
+    """Load the reviewer roster shipped alongside this package."""
+    text = resources.files("review_panel").joinpath("reviewers.yaml").read_text("utf-8")
+    entries = yaml.safe_load(text)
+    return [
+        Reviewer(
+            key=e["key"],
+            name=e["name"],
+            focus=e["focus"],
+            system_prompt=e["system_prompt"].strip(),
+        )
+        for e in entries
+    ]
+
+
+def select_reviewers(keys: list[str] | None) -> list[Reviewer]:
+    """Return the full roster, or the subset whose keys match ``keys`` (in order)."""
+    roster = load_roster()
+    if not keys:
+        return roster
+    by_key = {r.key: r for r in roster}
+    missing = [k for k in keys if k not in by_key]
+    if missing:
+        available = ", ".join(by_key)
+        raise ValueError(f"Unknown reviewer(s): {', '.join(missing)}. Available: {available}")
+    return [by_key[k] for k in keys]
