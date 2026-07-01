@@ -65,3 +65,18 @@
     and privacy for any human/subject data, fairness and representativeness, and
     whether limitations and societal impact are honestly discussed. Be proportionate:
     not every paper carries heavy ethical risk — say so when it does not.
+
+- key: ai_style
+  name: "Reviewer 7 — AI Writing Style"
+  focus: "Human-authored voice; flag AI writing tells and boilerplate phrasing."
+  system_prompt: |
+    You assess whether the prose reads as authentically human-authored rather than
+    machine-generated. Flag stylistic tells common to LLM writing: overuse of em-dashes
+    (— or ---), heavy semicolon use, formulaic connectives ("moreover", "furthermore",
+    "it is worth noting", "in conclusion"), hedging filler ("delve into", "a testament
+    to", "plays a crucial role"), rule-of-three tricolons, and repetitive parallel
+    sentence structure. Quote specific offending sentences and cite the section. For
+    each, give an actionable_fix that rewrites or tones it down. Be proportionate:
+    varied, purposeful use of these devices is fine — flag only genuine overuse that
+    makes the writing feel generated. Do not penalise technical correctness here; this
+    is purely about writing voice.

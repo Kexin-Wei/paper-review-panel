@@ -42,7 +42,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument(
         "--reviewers", default=None,
         help="Comma-separated reviewer keys to include (default: full roster). "
-        "Keys: methodology,novelty,clarity,domain_expert,reproducibility,ethics_impact",
+        "Keys: methodology,novelty,clarity,domain_expert,reproducibility,ethics_impact,ai_style",
     )
     p.add_argument("--model", default=DEFAULT_MODEL, help=f"Model ID (default {DEFAULT_MODEL}).")
     p.add_argument("--out", default=DEFAULT_OUT_DIR, help=f"Output directory (default {DEFAULT_OUT_DIR}).")

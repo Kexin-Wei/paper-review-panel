@@ -46,7 +46,7 @@ Options:
 | `--max-pages N` | `100` | Reject longer PDFs. |
 
 Reviewer keys: `methodology`, `novelty`, `clarity`, `domain_expert`,
-`reproducibility`, `ethics_impact`. Edit `src/review_panel/reviewers.yaml` to add,
+`reproducibility`, `ethics_impact`, `ai_style`. Edit `src/review_panel/reviewers.yaml` to add,
 remove, or re-word reviewers — the panel size adapts automatically.
 
 ## Output
