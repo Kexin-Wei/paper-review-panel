@@ -12,21 +12,51 @@ It models a real program committee:
 3. **Discussion round(s)** — reviewers see each other and may revise their scores.
 4. **Area Chair** — weighs the reviews, surfaces disagreements, and decides.
 
-Figure judgement is native: each reviewer opens the PDF with Claude Code's `Read`
-tool, which renders every page as an image, so reviewers critique specific figures
-and tables by number.
+Figure judgement is native: the PDF is parsed once (text + one image per page)
+and streamed inline to every reviewer, so figures and tables are preserved and
+critiqued by number.
 
 It runs on the **Claude Agent SDK** — no API key. Authentication and billing go
 through your **Claude Code subscription** via the `claude` CLI.
 
-## Install
+## Setup
+
+Requires the [Claude Code](https://claude.com/claude-code) CLI installed and
+logged in (run `claude` once to authenticate). No `ANTHROPIC_API_KEY` is needed.
+
+### 1. Install the CLI globally
 
 ```bash
-pip install -e .
+uv tool install /path/to/paper-review-panel
 ```
 
-Requires the [Claude Code](https://claude.com/claude-code) CLI installed and logged
-in (run `claude` once to authenticate). No `ANTHROPIC_API_KEY` is needed.
+Puts `review-panel` on your `$PATH` so every shell and every coding agent
+(Claude Code, opencode, antigravity, plain bash) can invoke it. For local
+development instead, use `pip install -e .` inside the repo.
+
+Verify from any directory:
+
+```bash
+review-panel --version
+```
+
+### 2. Expose it as an agent skill (Claude Code + opencode)
+
+The repo ships a skill at [.claude/skills/paper-review/SKILL.md](.claude/skills/paper-review/SKILL.md).
+Symlink it into `~/.claude/skills/` so both Claude Code and opencode auto-discover
+it and know **when** to invoke `review-panel` (triggers live in the skill's
+frontmatter):
+
+```bash
+mkdir -p ~/.claude/skills
+ln -sfn "$(pwd)/.claude/skills/paper-review" ~/.claude/skills/paper-review
+```
+
+Run this from the repo root. The symlink keeps a single source of truth: edit
+the skill in the repo, both agent surfaces see the update.
+
+**Antigravity** (or any agent that doesn't read `~/.claude/skills/`) still
+works — it invokes the CLI via its bash tool, no extra setup.
 
 ## Usage
 
@@ -56,7 +86,7 @@ lower it to `4` or `5` if your subscription tier trips rate limits).
 
 ## Output
 
-Written next to the PDF (or under `--out DIR`), named after the paper:
+Written next to the PDF (or under `./out/` for URL sources), named after the paper:
 
 - `<pdf>.review.md` — recommendation, score table, Area Chair meta-review, and each
   full review (summary, strengths, actionable weaknesses, figure assessments,
