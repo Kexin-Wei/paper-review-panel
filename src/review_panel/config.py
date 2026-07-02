@@ -11,23 +11,19 @@ import yaml
 DEFAULT_MODEL = "claude-opus-4-8"
 
 DEFAULT_ROUNDS = 1          # discussion rounds after the independent round (0 = single-pass)
-DEFAULT_MAX_PAGES = 100     # Claude PDF per-request page ceiling
-MAX_PDF_BYTES = 32 * 1024 * 1024  # 32 MB per-request ceiling
-DEFAULT_OUT_DIR = "out"
-
-# Output-token budgets per call type.
-REVIEW_MAX_TOKENS = 4096
-META_MAX_TOKENS = 4096
-TRIAGE_MAX_TOKENS = 1024
+DEFAULT_MAX_PAGES = 100     # PDF page ceiling
+MAX_PDF_BYTES = 32 * 1024 * 1024  # 32 MB ceiling
+DEFAULT_OUT_DIR = "out"     # fallback output dir when the source is a URL
+JSON_ONLY = False           # when True, skip the Markdown report and write only JSON
 
 # Prepended to every reviewer's system prompt.
 SHARED_PREAMBLE = (
-    "You are an expert peer reviewer on a program committee. You are reviewing the "
-    "attached paper (provided as a PDF, including all figures and tables). Read the "
-    "whole paper, including the figures, which you can see. Be specific, fair, and "
-    "constructive; ground every point in the actual content and cite sections, "
-    "figures, and tables by number. Make weaknesses actionable. When you are done, "
-    "call the submit_review tool with your structured review."
+    "You are an expert peer reviewer on a program committee. The paper under review is "
+    "provided to you directly: first its full extracted text, then one image per page "
+    "showing the exact layout (so you can see all figures, tables, and equations). Read "
+    "the whole paper. Be specific, fair, and constructive; ground every point in the "
+    "actual content and cite sections, figures, and tables by number. Make weaknesses "
+    "actionable. Return your assessment as the required structured review object."
 )
 
 

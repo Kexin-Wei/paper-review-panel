@@ -1,11 +1,15 @@
-"""Tool input schemas that force every model call to return parseable JSON.
+"""JSON schemas that make every model call return a parseable structured object.
 
-Each reviewer/area-chair call uses forced tool use (``tool_choice`` pinned to the
-tool below), so the model *must* return a structured object matching the schema
-instead of free-form prose.
+Each reviewer/triage/area-chair call runs through the Claude Agent SDK with
+``output_format={"type": "json_schema", "schema": ...}``, so the model's final
+result is a structured object matching the schema instead of free-form prose.
+``to_output_schema`` adapts the schemas below into a form the structured-output
+compiler accepts.
 """
 
 from __future__ import annotations
+
+import copy
 
 # --- Triage: detect the paper's field so the domain reviewer can adapt --------
 TRIAGE_TOOL = {
@@ -176,3 +180,30 @@ META_REVIEW_TOOL = {
         ],
     },
 }
+
+# --- Structured-output adaptation ---------------------------------------------
+# The structured-output compiler requires ``additionalProperties: false`` on every
+# object and rejects numeric/length constraints. The tool dicts above keep those
+# constraints (they document intent and are asserted in tests); this helper emits
+# a compiler-friendly copy of a tool's ``input_schema``.
+_UNSUPPORTED_KEYS = ("minimum", "maximum", "minLength", "maxLength", "multipleOf")
+
+
+def _sanitize(node: object) -> object:
+    if isinstance(node, dict):
+        clean = {k: _sanitize(v) for k, v in node.items() if k not in _UNSUPPORTED_KEYS}
+        if clean.get("type") == "object":
+            clean.setdefault("additionalProperties", False)
+        return clean
+    if isinstance(node, list):
+        return [_sanitize(v) for v in node]
+    return node
+
+
+def to_output_schema(tool: dict) -> dict:
+    """Return a structured-output-ready JSON schema from a tool's ``input_schema``.
+
+    Deep-copies the schema, strips constraints the compiler rejects, and sets
+    ``additionalProperties: false`` on every object.
+    """
+    return _sanitize(copy.deepcopy(tool["input_schema"]))  # type: ignore[return-value]

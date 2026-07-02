@@ -16,6 +16,8 @@ env/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.omo/
+.codegraph
 
 # Output reports
 out/

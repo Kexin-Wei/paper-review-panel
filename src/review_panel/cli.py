@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -18,6 +18,7 @@ from .config import (
     DEFAULT_MODEL,
     DEFAULT_OUT_DIR,
     DEFAULT_ROUNDS,
+    JSON_ONLY,
     select_reviewers,
 )
 from .panel import run_panel
@@ -44,21 +45,16 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         help="Comma-separated reviewer keys to include (default: full roster). "
         "Keys: methodology,novelty,clarity,domain_expert,reproducibility,ethics_impact,ai_style",
     )
-    p.add_argument("--model", default=DEFAULT_MODEL, help=f"Model ID (default {DEFAULT_MODEL}).")
-    p.add_argument("--out", default=DEFAULT_OUT_DIR, help=f"Output directory (default {DEFAULT_OUT_DIR}).")
-    p.add_argument("--json-only", action="store_true", help="Write only report.json (skip Markdown).")
-    p.add_argument("--no-cache", action="store_true", help="Disable prompt caching of the PDF.")
-    p.add_argument(
-        "--max-pages", type=int, default=DEFAULT_MAX_PAGES,
-        help=f"Reject PDFs longer than this many pages (default {DEFAULT_MAX_PAGES}).",
-    )
     p.add_argument("--version", action="version", version=f"review-panel {__version__}")
     return p.parse_args(argv)
 
 
 async def _run(args: argparse.Namespace) -> int:
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        err_console.print("[red]ANTHROPIC_API_KEY is not set.[/] Add it to your environment or a .env file.")
+    if shutil.which("claude") is None:
+        err_console.print(
+            "[red]The `claude` CLI was not found.[/] The panel runs on your Claude Code "
+            "subscription — install Claude Code and run `claude` to log in, then retry."
+        )
         return 2
 
     try:
@@ -74,36 +70,46 @@ async def _run(args: argparse.Namespace) -> int:
 
     try:
         with console.status("Loading PDF…"):
-            pdf = load_pdf(args.pdf, max_pages=args.max_pages)
+            pdf = load_pdf(args.pdf, max_pages=DEFAULT_MAX_PAGES)
     except (FileNotFoundError, ValueError) as exc:
         err_console.print(f"[red]{exc}[/]")
         return 1
 
     console.print(
         f"[bold]{pdf.filename}[/] · {pdf.n_pages} pages · "
-        f"{len(reviewers)} reviewers · {args.rounds} discussion round(s) · {args.model}"
+        f"{len(reviewers)} reviewers · {args.rounds} discussion round(s) · {DEFAULT_MODEL}"
     )
 
-    client = Client(model=args.model)
+    client = Client(model=DEFAULT_MODEL)
     result = await run_panel(
         pdf,
         reviewers,
         client=client,
         rounds=args.rounds,
-        cache=not args.no_cache,
         on_event=lambda m: console.print(f"[dim]• {m}[/]"),
     )
 
-    out_dir = Path(args.out)
+    # Write next to the PDF (local file), named after it; else ./out/ (URLs).
+    if Path(pdf.path).is_file() and not pdf.source.startswith(("http://", "https://")):
+        out_dir = Path(pdf.path).parent
+    else:
+        out_dir = Path(DEFAULT_OUT_DIR)
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "report.json").write_text(to_json(result), encoding="utf-8")
-    if not args.json_only:
-        (out_dir / "report.md").write_text(to_markdown(result), encoding="utf-8")
+
+    stem = Path(pdf.filename).stem or "paper"
+    json_path = out_dir / f"{stem}.review.json"
+    json_path.write_text(to_json(result), encoding="utf-8")
+    written = [json_path]
+    if not JSON_ONLY:
+        md_path = out_dir / f"{stem}.review.md"
+        md_path.write_text(to_markdown(result), encoding="utf-8")
+        written.insert(0, md_path)
 
     rec = result.meta_review.get("recommendation", "?")
     console.rule("[bold]Result")
     console.print(f"Recommendation: [bold]{rec}[/]")
-    console.print(f"Wrote reports to [bold]{out_dir}/[/]")
+    for path in written:
+        console.print(f"Wrote [bold]{path}[/]")
     return 0
 
 

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import base64
 import io
+import os
 
 import pytest
 from pypdf import PdfWriter
@@ -26,20 +26,18 @@ def test_load_local_pdf(tmp_path):
     doc = load_pdf(str(p))
     assert doc.n_pages == 3
     assert doc.filename == "paper.pdf"
-    assert doc.size_bytes > 0
-    # base64 round-trips back to the original bytes
-    assert base64.standard_b64decode(doc.b64) == doc.data
-
-
-def test_document_block_has_cache_control_when_enabled(tmp_path):
-    p = tmp_path / "paper.pdf"
-    p.write_bytes(_make_pdf(1))
-    doc = load_pdf(str(p))
-    block = doc.document_block(cache=True)
-    assert block["type"] == "document"
-    assert block["source"]["media_type"] == "application/pdf"
-    assert block["cache_control"] == {"type": "ephemeral"}
-    assert "cache_control" not in doc.document_block(cache=False)
+    # path is an absolute filesystem path, and dir is its parent
+    assert os.path.isabs(doc.path) and os.path.isfile(doc.path)
+    assert doc.dir == os.path.dirname(doc.path)
+    assert os.path.basename(doc.path) == "paper.pdf"
+    # the paper is parsed once: one rendered PNG per page
+    assert len(doc.page_images) == 3
+    # content blocks share the paper: a leading text block + one image per page
+    blocks = doc.content_blocks()
+    assert blocks[0]["type"] == "text"
+    images = [b for b in blocks if b["type"] == "image"]
+    assert len(images) == 3
+    assert images[0]["source"]["media_type"] == "image/png"
 
 
 def test_missing_file_raises(tmp_path):

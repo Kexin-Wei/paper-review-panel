@@ -12,16 +12,21 @@ This mirrors a real program committee:
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import dataclass
-from typing import Callable
+from typing import Awaitable, Callable
 
 from .client import Client, Usage
-from .config import META_MAX_TOKENS, REVIEW_MAX_TOKENS, Reviewer
+from .config import Reviewer
 from .pdf import PdfDoc
-from .schemas import META_REVIEW_TOOL, REVIEW_TOOL
+from .schemas import META_REVIEW_TOOL, REVIEW_TOOL, to_output_schema
 from .triage import triage
 
 EventHook = Callable[[str], None] | None
+
+# Run the default roster in parallel per phase. Calls are single-turn and
+# client.py retries on rate limits. Lower to 4-5 if your tier trips.
+DEFAULT_CONCURRENCY = 8
 
 
 @dataclass
@@ -53,23 +58,20 @@ def _emit(hook: EventHook, msg: str) -> None:
         hook(msg)
 
 
-def _review_content(pdf: PdfDoc, instruction: str, cache: bool) -> list[dict]:
-    return [pdf.document_block(cache=cache), {"type": "text", "text": instruction}]
-
-
 async def _review_independent(
-    client: Client, reviewer: Reviewer, pdf: PdfDoc, field_: str, subfield: str, cache: bool
+    client: Client, reviewer: Reviewer, doc_blocks: list, field_: str, subfield: str
 ) -> dict:
     system = reviewer.render_system_prompt(field_, subfield)
-    instruction = (
-        "Review this paper from your assigned perspective. Inspect the figures and "
-        "tables directly. Then call submit_review with your structured review."
+    prompt = (
+        "The paper text and its page images are provided above. Review it from your "
+        "assigned perspective. Inspect the figures and tables directly in the page "
+        "images. Then return your structured review."
     )
-    return await client.call_tool(
+    return await client.run(
         system=system,
-        content=_review_content(pdf, instruction, cache),
-        tool=REVIEW_TOOL,
-        max_tokens=REVIEW_MAX_TOKENS,
+        prompt=prompt,
+        schema=to_output_schema(REVIEW_TOOL),
+        doc_blocks=doc_blocks,
     )
 
 
@@ -92,29 +94,29 @@ def _peer_digest(reviewers: list[Reviewer], current: dict[str, dict], exclude: s
 async def _review_discussion(
     client: Client,
     reviewer: Reviewer,
-    pdf: PdfDoc,
+    doc_blocks: list,
     field_: str,
     subfield: str,
     own_prev: dict,
     peer_digest: str,
-    cache: bool,
 ) -> dict:
     system = reviewer.render_system_prompt(field_, subfield)
-    instruction = (
-        "This is the reviewer discussion phase. Below is your own previous review, "
-        "followed by your co-reviewers' reviews. Reconsider your assessment in light "
-        "of their points: you may keep or change your score. If you change it, set "
-        "score_change_reason. Re-inspect the figures/tables if relevant. Then call "
-        "submit_review with your (possibly revised) review.\n\n"
+    prompt = (
+        "This is the reviewer discussion phase. The paper text and page images are "
+        "provided above. Below is your own previous review, followed by your "
+        "co-reviewers' reviews. Reconsider your assessment in light of their points: "
+        "you may keep or change your score. If you change it, set score_change_reason. "
+        "Re-inspect the figures/tables if relevant. Then return your (possibly revised) "
+        "structured review.\n\n"
         f"## Your previous review\nScore {own_prev.get('score')}/10. "
         f"Summary: {own_prev.get('summary', '')}\n\n"
         f"## Co-reviewers' reviews\n{peer_digest}"
     )
-    return await client.call_tool(
+    return await client.run(
         system=system,
-        content=_review_content(pdf, instruction, cache),
-        tool=REVIEW_TOOL,
-        max_tokens=REVIEW_MAX_TOKENS,
+        prompt=prompt,
+        schema=to_output_schema(REVIEW_TOOL),
+        doc_blocks=doc_blocks,
     )
 
 
@@ -136,24 +138,24 @@ def _format_reviews_for_ac(records: list[ReviewRecord]) -> str:
     return "\n\n".join(blocks)
 
 
-async def _area_chair(client: Client, pdf: PdfDoc, tri: dict, records: list[ReviewRecord], cache: bool) -> dict:
+async def _area_chair(client: Client, doc_blocks: list, tri: dict, records: list[ReviewRecord]) -> dict:
     system = (
-        "You are the Area Chair for a competitive venue. You have the paper (attached "
-        "PDF) and the panel's reviews. Weigh each reviewer's confidence, resolve or "
-        "surface disagreements honestly, and issue a fair recommendation. Do not simply "
-        "average scores. Call submit_meta_review."
+        "You are the Area Chair for a competitive venue. You have the paper (its text "
+        "and page images are provided) and the panel's reviews. Weigh each reviewer's "
+        "confidence, resolve or surface disagreements honestly, and issue a fair "
+        "recommendation. Do not simply average scores. Return the structured meta-review."
     )
-    instruction = (
+    prompt = (
         f"Paper: {tri.get('title')} (field: {tri.get('field')} / {tri.get('subfield')}; "
         f"type: {tri.get('paper_type')}).\n\n"
         f"Here are the reviews:\n\n{_format_reviews_for_ac(records)}\n\n"
-        "Synthesise them and call submit_meta_review."
+        "Synthesise them and return the structured meta-review."
     )
-    return await client.call_tool(
+    return await client.run(
         system=system,
-        content=_review_content(pdf, instruction, cache),
-        tool=META_REVIEW_TOOL,
-        max_tokens=META_MAX_TOKENS,
+        prompt=prompt,
+        schema=to_output_schema(META_REVIEW_TOOL),
+        doc_blocks=doc_blocks,
     )
 
 
@@ -163,16 +165,37 @@ async def run_panel(
     *,
     client: Client,
     rounds: int,
-    cache: bool = True,
+    concurrency: int = DEFAULT_CONCURRENCY,
     on_event: EventHook = None,
 ) -> PanelResult:
+    sem = asyncio.Semaphore(concurrency)
+
+    async def _bounded(reviewer: Reviewer, label: str, coro: Awaitable[dict]) -> dict:
+        async with sem:
+            _emit(on_event, f"  → {reviewer.name} — {label} started…")
+            t0 = time.monotonic()
+            rev = await coro
+            dt = time.monotonic() - t0
+            _emit(
+                on_event,
+                f"  ✓ {reviewer.name} — {label} done in {dt:.0f}s "
+                f"(score {rev.get('score', '?')}/10)",
+            )
+            return rev
+
+    # Parse the paper once; every call reuses these text + image blocks.
+    doc_blocks = pdf.content_blocks()
+
     _emit(on_event, "Triaging paper (detecting field)…")
-    tri = await triage(client, pdf, cache)
+    tri = await triage(client, doc_blocks)
     field_, subfield = tri["field"], tri["subfield"]
     _emit(on_event, f"Field: {field_} / {subfield}. Running {len(reviewers)} independent reviews…")
 
     round0 = await asyncio.gather(
-        *[_review_independent(client, r, pdf, field_, subfield, cache) for r in reviewers]
+        *[
+            _bounded(r, "independent review", _review_independent(client, r, doc_blocks, field_, subfield))
+            for r in reviewers
+        ]
     )
     histories: dict[str, list[dict]] = {r.key: [rev] for r, rev in zip(reviewers, round0)}
 
@@ -181,9 +204,13 @@ async def run_panel(
         current = {r.key: histories[r.key][-1] for r in reviewers}
         results = await asyncio.gather(
             *[
-                _review_discussion(
-                    client, r, pdf, field_, subfield, current[r.key],
-                    _peer_digest(reviewers, current, exclude=r.key), cache,
+                _bounded(
+                    r,
+                    f"discussion round {i + 1}",
+                    _review_discussion(
+                        client, r, doc_blocks, field_, subfield, current[r.key],
+                        _peer_digest(reviewers, current, exclude=r.key),
+                    ),
                 )
                 for r in reviewers
             ]
@@ -205,7 +232,7 @@ async def run_panel(
     ]
 
     _emit(on_event, "Area Chair writing meta-review…")
-    meta = await _area_chair(client, pdf, tri, records, cache)
+    meta = await _area_chair(client, doc_blocks, tri, records)
 
     return PanelResult(
         pdf_source=pdf.source,

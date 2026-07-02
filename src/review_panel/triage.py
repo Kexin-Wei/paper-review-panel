@@ -3,27 +3,26 @@
 from __future__ import annotations
 
 from .client import Client
-from .config import TRIAGE_MAX_TOKENS
-from .pdf import PdfDoc
-from .schemas import TRIAGE_TOOL
+from .schemas import TRIAGE_TOOL, to_output_schema
 
 _TRIAGE_SYSTEM = (
-    "You are an editorial assistant triaging a submitted paper (attached as a PDF). "
-    "Identify its title, primary research field, subfield, and paper type so the "
-    "correct expert reviewers can be assigned. Call submit_triage with your findings."
+    "You are an editorial assistant triaging a submitted paper. Its text and page "
+    "images are provided. Identify its title, primary research field, subfield, and "
+    "paper type so the correct expert reviewers can be assigned. Return your findings "
+    "as the required structured triage object."
 )
 
 
-async def triage(client: Client, pdf: PdfDoc, cache: bool = True) -> dict:
-    content = [
-        pdf.document_block(cache=cache),
-        {"type": "text", "text": "Triage this paper. Call submit_triage."},
-    ]
-    result = await client.call_tool(
+async def triage(client: Client, doc_blocks: list) -> dict:
+    prompt = (
+        "The paper text and page images are provided above. Triage it and return the "
+        "structured result."
+    )
+    result = await client.run(
         system=_TRIAGE_SYSTEM,
-        content=content,
-        tool=TRIAGE_TOOL,
-        max_tokens=TRIAGE_MAX_TOKENS,
+        prompt=prompt,
+        schema=to_output_schema(TRIAGE_TOOL),
+        doc_blocks=doc_blocks,
     )
     # Fill defaults so downstream formatting never KeyErrors.
     result.setdefault("title", "(untitled)")
